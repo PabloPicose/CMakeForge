@@ -13,7 +13,7 @@ use std::process::Command;
 #[derive(Parser, Debug)]
 #[command(
     name = "CMakeForge",
-    version = "0.1",
+    version = "0.2",
     about = "A simple CLI for build management"
 )]
 struct Cli {
@@ -25,6 +25,8 @@ struct Cli {
 enum Commands {
     /// Initialize the project
     Init,
+    /// Call the configure command
+    Configure,
     /// Select current build target
     SelectCurrentBuild,
     /// Build the current build target
@@ -41,6 +43,7 @@ struct CacheJson {
     current_build_target: String,
     builds: Vec<BuildJson>,
     runs: Vec<RunJson>,
+    configurations: Vec<ConfigureJson>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -58,6 +61,13 @@ struct RunJson {
     pre_build: bool,
 }
 
+#[derive(Serialize, Deserialize)]
+struct ConfigureJson {
+    name: String,
+    command: String,
+    args: Vec<String>,
+}
+
 impl BuildJson {
     fn build(&self, workspace: &PathBuf) -> Result<(), Box<dyn Error>> {
         let vec_of_slices: Vec<&str> = self.args.iter().map(|s| s.as_str()).collect();
@@ -67,6 +77,13 @@ impl BuildJson {
 
 impl RunJson {
     fn run(&self, workspace: &PathBuf) -> Result<(), Box<dyn Error>> {
+        let vec_of_slices: Vec<&str> = self.args.iter().map(|s| s.as_str()).collect();
+        run_command(workspace, &self.command, &vec_of_slices)
+    }
+}
+
+impl ConfigureJson {
+    fn configure(&self, workspace: &PathBuf) -> Result<(), Box<dyn Error>> {
         let vec_of_slices: Vec<&str> = self.args.iter().map(|s| s.as_str()).collect();
         run_command(workspace, &self.command, &vec_of_slices)
     }
@@ -114,7 +131,7 @@ fn confirm_overwrite() -> bool {
 /// * `path` - path where the json should be created
 /// # Panics
 /// Panics if cannot read/write into ~/.cache/CMakeForge/ path
-fn create_json_in_workspace(workspace: &PathBuf, json_path: &PathBuf) {
+fn create_json_in_workspace(json_path: &PathBuf, workspace: &PathBuf) {
     if json_path.exists() {
         // ask the user if want to overwrite the file
         if !confirm_overwrite() {
@@ -147,6 +164,16 @@ fn create_json_in_workspace(workspace: &PathBuf, json_path: &PathBuf) {
                 pre_build: true,
             },
         ],
+        configurations: vec![ConfigureJson {
+            name: "test1".to_string(),
+            command: "cmake".to_string(),
+            args: vec![
+                "-DCMAKE_BUILD_TYPE=Debug".to_string(),
+                "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON".to_string(),
+                "-G".to_string(),
+                "Ninja".to_string(),
+            ],
+        }],
     };
     let json_string = serde_json::to_string_pretty(&cache).expect("Failed to serialize");
     println!(
@@ -235,11 +262,30 @@ fn run_current_target(json_path: &PathBuf, workspace: &PathBuf) -> Result<(), Bo
     Err(format!("Run target not found: {}", cache.current_build_target).into())
 }
 
+fn configure_current_build_target(
+    json_path: &PathBuf,
+    workspace: &PathBuf,
+) -> Result<(), Box<dyn Error>> {
+    let cache: CacheJson = read_cache(json_path)?;
+    println!("Current build target: {}", cache.current_build_target);
+    for curr_config in &cache.configurations {
+        if curr_config.name == cache.current_build_target {
+            println!("Configuring {}", curr_config.name);
+            // Add your configure logic here
+            return curr_config.configure(workspace);
+        }
+    }
+    Err(format!("Configure target not found: {}", cache.current_build_target).into())
+}
+
 fn cli_parser(workspace: &PathBuf, json_path: &PathBuf) -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
+    if json_path.exists() {
+        println!("Loading json: {}", json_path.display());
+    }
     match &cli.command {
         Commands::Init => {
-            create_json_in_workspace(workspace, json_path);
+            create_json_in_workspace(json_path, workspace);
         }
         Commands::SelectCurrentBuild => {
             select_current_build_target(json_path)?;
@@ -249,6 +295,9 @@ fn cli_parser(workspace: &PathBuf, json_path: &PathBuf) -> Result<(), Box<dyn Er
         }
         Commands::Run => {
             run_current_target(json_path, workspace)?;
+        }
+        Commands::Configure => {
+            configure_current_build_target(json_path, workspace)?;
         }
     }
     Ok(())
